@@ -1,0 +1,22 @@
+# OS / editor noise
+Thumbs.db
+*.log
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtualenvs
+.venv/
+venv/
+
+# Reports and large binary exports
+reports/
+*.xlsx
+*.xlsm
+*.accdb
+*.laccdb
+
+# Generated JSON snapshots
+ops_milestones_put_requests.json
