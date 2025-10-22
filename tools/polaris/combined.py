@@ -12,14 +12,15 @@ import boto3
 import pandas as pd
 from boto3.dynamodb.conditions import Attr
 
-from . import DEFAULT_COLUMNS, process_polaris_export
 from .io import write_records
 from .processing import (
+    DEFAULT_COLUMNS,
     DATE_COLUMNS,
     DEFAULT_SHEET_NAME,
     DEFAULT_SKIPROWS,
     assign_status_numeric,
     combine_buyers,
+    process_polaris_export,
     _coerce_dates,
     _ensure_columns,
     _finalize_records,
@@ -176,9 +177,10 @@ def _scan_hso(
     table_name: str,
     region: str,
     include_projects: Optional[Iterable[str]] = None,
+    profile: Optional[str] = None,
 ) -> List[dict]:
-    resource = boto3.resource("dynamodb", region_name=region)
-    table = resource.Table(table_name)
+    session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+    table = session.resource("dynamodb", region_name=region).Table(table_name)
     scan_kwargs = {}
     if include_projects:
         projects = [p for p in include_projects if p]
@@ -202,11 +204,12 @@ def load_hso_dataframe(
     *,
     table_name: str = DEFAULT_HSO_TABLE,
     region: str = DEFAULT_HSO_REGION,
+    profile: Optional[str] = None,
     columns_to_keep: Optional[Sequence[str]] = None,
     include_projects: Optional[Iterable[str]] = None,
 ) -> pd.DataFrame:
     columns_to_keep = list(columns_to_keep or DEFAULT_COLUMNS)
-    items = _scan_hso(table_name, region, include_projects)
+    items = _scan_hso(table_name, region, include_projects, profile=profile)
     if not items:
         return pd.DataFrame(columns=columns_to_keep)
 
@@ -237,6 +240,7 @@ def combine_sources(
     include_projects: Optional[Iterable[str]] = None,
     table_name: str = DEFAULT_HSO_TABLE,
     region: str = DEFAULT_HSO_REGION,
+    profile: Optional[str] = None,
 ) -> pd.DataFrame:
     columns_to_keep = list(columns_to_keep or DEFAULT_COLUMNS)
     frames: List[pd.DataFrame] = []
@@ -255,6 +259,7 @@ def combine_sources(
     hso_df = load_hso_dataframe(
         table_name=table_name,
         region=region,
+        profile=profile,
         columns_to_keep=columns_to_keep,
         include_projects=include_projects,
     )
@@ -312,6 +317,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"AWS region for the hbfa_sales_offers table (default: {DEFAULT_HSO_REGION}).",
     )
     parser.add_argument(
+        "--profile",
+        help="Optional AWS profile name for DynamoDB access.",
+    )
+    parser.add_argument(
         "--project",
         dest="projects",
         action="append",
@@ -349,6 +358,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         include_projects=args.projects,
         table_name=args.hso_table,
         region=args.hso_region,
+        profile=args.profile,
     )
 
     records = _finalize_records(combined_df)
