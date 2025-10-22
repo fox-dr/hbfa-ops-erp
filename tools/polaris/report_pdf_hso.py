@@ -116,6 +116,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="DynamoDB table for ops milestones overrides (default: ops_milestones).",
     )
     parser.add_argument(
+        "--ops-region",
+        default="us-west-1",
+        help="AWS region for ops milestones table (default: us-west-1).",
+    )
+    parser.add_argument(
         "--profile",
         help="Optional AWS profile for DynamoDB access.",
     )
@@ -170,7 +175,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ops_table = (args.ops_table or "").strip()
     ops_overrides = _load_ops_overrides(
         ops_table,
-        region=args.hso_region,
+        region=args.ops_region,
         profile=args.profile,
     )
 
