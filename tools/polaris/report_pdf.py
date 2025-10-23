@@ -213,9 +213,6 @@ def _apply_ops_overrides(df: pd.DataFrame, overrides: dict[tuple[str, str], dict
             df.at[idx, "Status"] = STATUS_KEY_TO_LABEL[status_key]
             df.at[idx, "StatusNumeric"] = STATUS_KEY_TO_NUMERIC[status_key]
             continue
-        if df.at[idx, "StatusNumeric"] == STATUS_KEY_TO_NUMERIC["inventory"]:
-            df.at[idx, "Status"] = STATUS_KEY_TO_LABEL["unreleased"]
-            df.at[idx, "StatusNumeric"] = STATUS_KEY_TO_NUMERIC["unreleased"]
     return df
 
 
