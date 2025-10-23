@@ -532,12 +532,32 @@ def _format_boolean(value: object) -> str:
 
 
 def _format_date(value: object) -> str:
-    if value in (None, ""):
+    if value is None:
         return ""
-    parsed = pd.to_datetime(value, errors="coerce")
+    if value is pd.NA or (hasattr(pd, "isna") and pd.isna(value)):
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%m/%d/%Y")
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        parsed = pd.to_datetime(text, errors="coerce", utc=True)
+        if pd.isna(parsed):
+            return text
+        return parsed.tz_convert("UTC").strftime("%m/%d/%Y")
+    parsed = pd.to_datetime(value, errors="coerce", utc=True)
     if pd.isna(parsed):
-        return ""
-    return parsed.strftime("%m/%d/%Y")
+        try:
+            text = str(value).strip()
+        except Exception:
+            return ""
+        if not text:
+            return ""
+        parsed = pd.to_datetime(text, errors="coerce", utc=True)
+        if pd.isna(parsed):
+            return text
+    return parsed.tz_convert("UTC").strftime("%m/%d/%Y")
 
 
 def _format_value(column_key: str, value: object) -> str:

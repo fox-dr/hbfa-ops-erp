@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence
 import sys
@@ -178,7 +178,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     combined_df = combined_df.copy()
     combined_df["pk"] = _build_pk(combined_df)
-    combined_df["ExtractedAt"] = datetime.utcnow().isoformat()
+    combined_df["ExtractedAt"] = datetime.now(timezone.utc).isoformat()
 
     records = combined_df.to_dict("records")
 
