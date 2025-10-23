@@ -126,8 +126,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output",
-        required=True,
-        help="Path to the PDF file that will be written.",
+        help=(
+            "Path to the PDF file that will be written. "
+            "Defaults to reports/mylar-<today>.pdf when omitted."
+        ),
     )
     parser.add_argument(
         "--logo",
@@ -148,6 +150,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_argument_parser()
     args = parser.parse_args(argv)
+
+    output_path: Path
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        today = datetime.now().strftime("%Y-%m-%d")
+        output_path = Path("reports") / f"mylar-{today}.pdf"
+        print(f"No --output provided; writing to {output_path}")
 
     columns_to_keep = _merge_columns(DEFAULT_COLUMNS, args.extra_columns)
 
@@ -190,7 +200,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     finally:
         legacy_report.EXCLUDED_PROJECTS = original_excluded
 
-    charts_dir = Path(args.output).parent / "_charts_temp"
+    charts_dir = output_path.parent / "_charts_temp"
     chart_paths = legacy_report.generate_summary_charts(  # type: ignore[attr-defined]
         summary_df,
         charts_dir,
@@ -199,7 +209,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     subtitle = args.subtitle or f"Generated {datetime.now():%m/%d/%Y %I:%M %p}"
     legacy_report.generate_pdf(  # type: ignore[attr-defined]
         table_df,
-        args.output,
+        output_path,
         title=args.title,
         subtitle=subtitle,
         logo_path=args.logo,
@@ -216,6 +226,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             charts_dir.rmdir()
         except OSError:
             pass
+
+    print(f"Wrote report to {output_path}")
 
     return 0
 

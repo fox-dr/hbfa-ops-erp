@@ -433,6 +433,7 @@ DATE_FIELDS = {
     "Buyer Contract: COE Date",
     "Buyer Contract: Contract Sent Date",
     "Buyer Contract: Appraiser Visit Date",
+    "Ops Milestone Date",
 }
 
 CURRENCY_FIELDS = {
@@ -446,11 +447,12 @@ BOOLEAN_FIELDS = {
     "Buyer Contract: Cash?",
 }
 
+# Include Ops milestone placeholders at the far right; widths still leave room for future fields.
 TABLE_COLUMNS: Sequence[ColumnConfig] = (
     ColumnConfig("AltProjectName", "Project", 22.0),
-    ColumnConfig("Contract Unit Number", "Unit", 16.0),
+    ColumnConfig("Contract Unit Number", "Unit", 19.0),
     ColumnConfig("Status", "Status", 22.0),
-    ColumnConfig("Buyer Contract: COE Date", "COE Date", 20.0),
+    ColumnConfig("Buyer Contract: COE Date", "COE Date", 17.0),
     ColumnConfig("Buyers Combined", "Buyers Combined", 34.0),
     ColumnConfig("Buyer Contract: Cash?", "Cash?", 12.0, align="C"),
     ColumnConfig("Buyer Contract: Investor/Owner", "Investor/Owner", 22.0),
@@ -461,6 +463,8 @@ TABLE_COLUMNS: Sequence[ColumnConfig] = (
     ColumnConfig("Buyer Contract: Contract Sent Date", "Contract Sent Date", 20.0),
     ColumnConfig("Buyer Contract: Appraiser Visit Date", "Appraiser Visit Date", 20.0),
     ColumnConfig("Buyer Contract: Notes", "Notes", 60.0),
+    ColumnConfig("Ops Milestone Code", "Ops MS", 14.0, align="C"),
+    ColumnConfig("Ops Milestone Date", "MS Date", 18.0),
 )
 
 
