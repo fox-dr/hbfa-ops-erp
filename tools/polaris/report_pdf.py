@@ -31,7 +31,7 @@ LEGEND_CELL_HEIGHT = 8.0
 LEGEND_SPACING = 6.0
 LEGEND_GRID: List[List[tuple[str, Optional[tuple[int, int, int]]]]] = [
     [
-        ("Closed", HIGHLIGHT_COLORS[1]),
+        ("Closed YTD", HIGHLIGHT_COLORS[1]),
         ("B1 Construction Release(Cut 1)", None),
         ("B5 1st Floor Frame Complete", None),
         ("B9 Roof Truss Delivery", None),
