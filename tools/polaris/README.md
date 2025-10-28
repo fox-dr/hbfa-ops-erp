@@ -36,11 +36,33 @@ tools/
   - `python -m tools.polaris.cli --input path_or_s3 --output out.json --format json|parquet`
   - `--dynamodb-table`/`--overwrite-keys` route cleaned rows directly into DynamoDB when boto3 is available.
 - PDF generators
-  - `python -m tools.polaris.report_pdf_hso --output reports/mylar.pdf --profile <aws-profile>`
-    - Primary flow: reads `hbfa_sales_offers`, optionally merges a Polaris export, applies `ops_milestones` overrides, and renders the Mylar PDF.
-  - `python -m tools.polaris.report_pdf --output reports/mylar.pdf --profile <aws-profile>`
-    - Legacy flow: reads `hbfa_PolarisRaw`; kept for historical comparisons.
-  - Both require `boto3`, `pandas`, `fpdf2`, `matplotlib` (`pip install boto3 pandas fpdf2 matplotlib`).
+- `python -m tools.polaris.report_pdf_hso --output reports/mylar.pdf --profile <aws-profile>`
+  - Primary flow: reads `hbfa_sales_offers`, optionally merges a Polaris export, applies `ops_milestones` overrides, and renders the Mylar PDF.
+- `python -m tools.polaris.report_pdf --output reports/mylar.pdf --profile <aws-profile>`
+  - Legacy flow: reads `hbfa_PolarisRaw`; kept for historical comparisons.
+- Both require `boto3`, `pandas`, `fpdf2`, `matplotlib` (`pip install boto3 pandas fpdf2 matplotlib`).
+- **Ops milestone key normalization**
+  - `python tools/polaris/normalize_ops_keys.py --profile hbfa-secure-uploader`
+    - Dry-run (default) scans `ops_milestones`, reporting any rows whose `pk`/`sk` do not match the canonical project/unit format (`SoMi Towns`, `SoMi A`, `SoMi B`, `Fusion`, `Aria`, `Vida`, plus `HayView-###` / `Fusion-###` unit numbers).
+    - Use the PowerShell commands below to hydrate the canonical keys before Mylar pulls Ops milestones into the `Ops MS` / `MS Date` columns:
+      ```powershell
+      # Preview the planned rewrites
+      python tools/polaris/normalize_ops_keys.py `
+        --profile hbfa-secure-uploader `
+        --region us-west-1
+
+      # Apply changes and append a JSONL backup (repeatable any time)
+      python tools/polaris/normalize_ops_keys.py `
+        --profile hbfa-secure-uploader `
+        --region us-west-1 `
+        --apply `
+        --backup ops-normalize-2025-10-23.jsonl
+      ```
+    - Canonical rows are created (or confirmed) and the legacy aliases are deleted so the Mylar exporter can join Ops milestones, set the two-character milestone code, and populate the matching milestone date.
+    - Prompt snippet for future runs:
+      ```text
+      You are cleaning up the ops_milestones table so Mylar can hydrate Ops MS / MS Date. Run normalize_ops_keys.py in dry-run mode first, then apply with a dated JSONL backup once the summary shows the expected aliases (SoMi → Towns/A/B, Fusion, Aria, Vida). Confirm the follow-up dry-run reports “prepared 0 rewrites.”
+      ```
 
 ## PDF Report Generators
 
