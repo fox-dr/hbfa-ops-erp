@@ -19,11 +19,158 @@ from fpdf import FPDF
 plt.switch_backend("Agg")
 
 HIGHLIGHT_COLORS = {
-    1: (244, 121, 131),   # light red
-    2: (255, 196, 79),   # light orange
-    3: (255, 196, 79),   # same orange
-    4: (173, 221, 142),  # light green
-    5: (200, 200, 200),  # light grey for pending release
+    1: (244, 121, 131),   # light red (Closed)
+    2: (255, 196, 79),    # light orange (Ratified)
+    # 3 intentionally has no fill (Offer - Out for signature)
+    4: (173, 221, 142),   # light green (Available)
+    5: (200, 200, 200),   # light grey (Pending Release)
+}
+
+LEGEND_CELL_WIDTH = 36.0
+LEGEND_CELL_HEIGHT = 8.0
+LEGEND_SPACING = 6.0
+LEGEND_GRID: List[List[tuple[str, Optional[tuple[int, int, int]]]]] = [
+    [
+        ("Closed", HIGHLIGHT_COLORS[1]),
+        ("B1 Construction Release(Cut 1)", None),
+        ("B5 1st Floor Frame Complete", None),
+        ("B9 Roof Truss Delivery", None),
+        ("U1 Unit Frame Inspection(Cut 3)", None),
+        ("U5 Appliance Delivery", None),
+    ],
+    [
+        ("Backlog", HIGHLIGHT_COLORS[2]),
+        ("B2 Foundation Start", None),
+        ("B6 2nd Floor Frame Complete", None),
+        ("B10 Roof/Shear Nail Inspection", None),
+        ("U2 Drywall Nail Inspection", None),
+        ("U6 Buyer Orientation", None),
+    ],
+    [
+        ("Available", HIGHLIGHT_COLORS[4]),
+        ("B3 Ground Plumbing Inspection", None),
+        ("B7 3rd Floor Frame Complete", None),
+        ("B11 Install Windows Ext. Doors", None),
+        ("U3 Drywall Texture", None),
+        ("", None),
+    ],
+    [
+        ("Pending", None),
+        ("B4 Foundation Pour(Cut 2)", None),
+        ("B8 4th Floor Frame Complete", None),
+        ("", None),
+        ("U4 Install Cabinets", None),
+        ("", None),
+    ],
+]
+
+UNIT_MILESTONE_CODES: Sequence[str] = (
+    "U6",
+    "U5",
+    "U4",
+    "U3",
+    "U2",
+    "U1",
+)
+
+BUILDING_MILESTONE_CODES: Sequence[str] = (
+    "B11",
+    "B10",
+    "B9",
+    "B8",
+    "B7",
+    "B6",
+    "B5",
+    "B4",
+    "B3",
+    "B2",
+    "B1",
+)
+
+MILESTONE_KEY_MAP: dict[str, tuple[str, ...]] = {
+    "B1": (
+        "construction_release",
+        "construction_release_cut1",
+        "release_construction_cut1",
+    ),
+    "B2": (
+        "foundation_start",
+        "start_foundation",
+        "start_foundation_cut2",
+    ),
+    "B3": (
+        "ground_plumbing_inspection",
+        "lower_foundation_ground_plumbing_inspection",
+        "upper_foundation_ground_plumbing_inspection",
+    ),
+    "B4": (
+        "foundation_pour",
+        "lower_foundation_pour",
+        "upper_foundation_pour",
+        "pour_foundation_slab",
+    ),
+    "B5": (
+        "first_floor_frame_complete",
+        "first_floor_structural_steel_100_percent",
+        "first_floor_frame_inspection",
+        "raise_walls_first_floor",
+        "set_second_floor_beams",
+    ),
+    "B6": (
+        "second_floor_frame_complete",
+        "frame_walls_second_floor",
+        "second_floor_plumbing_hvac_complete",
+        "second_floor_frame_inspection_first_floor_drywall_inspection",
+    ),
+    "B7": (
+        "third_floor_frame_complete",
+        "frame_third_floor_walls",
+        "third_floor_plumbing_hvac_complete",
+        "third_floor_frame_inspection_start",
+        "plumb_line_third_floor_walls",
+    ),
+    "B8": (
+        "fourth_floor_frame_inspection_start",
+        "fourth_floor_plumbing_hvac_complete",
+        "finish_framing_inspection",
+    ),
+    "B9": (
+        "roof_truss_delivery",
+        "deliver_roof_trusses",
+        "load_roof_trusses",
+    ),
+    "B10": (
+        "roof_nail_shear_nail_inspection",
+        "sheathing_inspection",
+    ),
+    "B11": (
+        "install_windows_exterior_doors",
+        "set_window_door_frames",
+    ),
+    "U1": (
+        "finish_framing_inspection",
+        "unit_frame_inspection",
+        "first_floor_frame_inspection",
+        "second_floor_frame_inspection_first_floor_drywall_inspection",
+        "third_floor_frame_inspection_start",
+        "fourth_floor_frame_inspection_start",
+    ),
+    "U2": (
+        "drywall_nail_inspection",
+    ),
+    "U3": (
+        "drywall_texture",
+        "texture_drywall",
+    ),
+    "U4": (
+        "install_cabinets",
+    ),
+    "U5": (
+        "appliance_delivery",
+    ),
+    "U6": (
+        "buyer_orientation",
+    ),
 }
 
 BASE_PROJECT_COLORS = [
@@ -145,22 +292,51 @@ def _resolve_override_status(overrides: Optional[dict]) -> Optional[str]:
     return None
 
 
+def _resolve_milestone(
+    unit_overrides: Optional[dict], building_overrides: Optional[dict]
+) -> tuple[Optional[str], Optional[str]]:
+    def first_match(codes: Sequence[str], dictionaries: Sequence[dict]) -> tuple[Optional[str], Optional[str]]:
+        for code in codes:
+            keys = MILESTONE_KEY_MAP.get(code, ())
+            if not keys:
+                continue
+            for overrides in dictionaries:
+                for key in keys:
+                    if key in overrides:
+                        value = overrides[key]
+                        if value not in (None, "", False):
+                            return code, value
+        return None, None
+
+    unit_dicts: List[dict] = []
+    if isinstance(unit_overrides, dict):
+        unit_dicts.append(unit_overrides)
+    if unit_dicts:
+        code, date = first_match(UNIT_MILESTONE_CODES, unit_dicts)
+        if code:
+            return code, date
+
+    building_dicts: List[dict] = []
+    if isinstance(building_overrides, dict):
+        building_dicts.append(building_overrides)
+    # Fall back to unit overrides for building milestones when data is stored there
+    if unit_dicts:
+        building_dicts.extend(unit_dicts)
+    if building_dicts:
+        return first_match(BUILDING_MILESTONE_CODES, building_dicts)
+    return None, None
+
+
 def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], dict]:
     index: dict[tuple[str, str], dict] = {}
     for raw in items:
-        item_type = raw.get("type")
-        if item_type != "unit":
-            continue
         project_id = raw.get("project_id") or ""
         unit_number = raw.get("unit_number") or raw.get("sk")
-        if not project_id or not unit_number:
-            pk = raw.get("pk")
-            if pk and "#" in pk:
-                project_id = project_id or pk.split("#", 1)[0]
-            unit_number = unit_number or raw.get("sk")
+        pk = raw.get("pk")
+        if not project_id and pk and "#" in pk:
+            project_id = pk.split("#", 1)[0]
         project_key = _normalize_project_id(project_id)
-        unit_key = _normalize_unit_number(unit_number)
-        if not project_key or not unit_key:
+        if not project_key:
             continue
         data = raw.get("data")
         if isinstance(data, str):
@@ -170,23 +346,41 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
                 continue
         if not isinstance(data, dict):
             continue
-        unit_data = data.get("unit")
-        if not isinstance(unit_data, dict):
-            continue
-        overrides = unit_data.get("overrides")
-        if not isinstance(overrides, dict) or not overrides:
-            continue
         timestamp = _parse_iso8601(raw.get("updated_at"))
-        key = (project_key, unit_key)
-        existing = index.get(key)
-        if existing:
-            existing_ts = existing.get("timestamp")
-            if existing_ts and timestamp and existing_ts >= timestamp:
-                continue
-        index[key] = {
-            "overrides": overrides,
-            "timestamp": timestamp,
-        }
+        candidates: List[tuple[str, dict]] = []
+        building_payload = data.get("building")
+        if isinstance(building_payload, dict):
+            building_overrides = building_payload.get("overrides")
+            if isinstance(building_overrides, dict) and building_overrides:
+                candidates.append(("#building", building_overrides))
+        unit_payload = data.get("unit")
+        if isinstance(unit_payload, dict):
+            unit_overrides = unit_payload.get("overrides")
+            if isinstance(unit_overrides, dict) and unit_overrides:
+                unit_id = unit_payload.get("unit_number") or unit_number
+                if unit_id is None:
+                    unit_id = raw.get("sk")
+                if unit_id is not None:
+                    candidates.append((str(unit_id), unit_overrides))
+        if not candidates:
+            continue
+        for raw_unit_key, ov in candidates:
+            if raw_unit_key == "#building":
+                unit_key = "#building"
+            else:
+                unit_key = _normalize_unit_number(raw_unit_key)
+                if not unit_key:
+                    continue
+            key = (project_key, unit_key)
+            existing = index.get(key)
+            if existing:
+                existing_ts = existing.get("timestamp")
+                if existing_ts and timestamp and existing_ts >= timestamp:
+                    continue
+            index[key] = {
+                "overrides": ov,
+                "timestamp": timestamp,
+            }
     return index
 
 
@@ -194,13 +388,14 @@ def _apply_ops_overrides(df: pd.DataFrame, overrides: dict[tuple[str, str], dict
     if not overrides:
         return df
     df = df.copy()
-    if "Status" not in df.columns:
-        df["Status"] = ""
-    df["StatusNumeric"] = (
-        pd.to_numeric(df.get("StatusNumeric", 99), errors="coerce")
-        .fillna(99)
-        .astype(int)
-    )
+    if "Ops Milestone Code" not in df.columns:
+        df["Ops Milestone Code"] = ""
+    if "Ops Milestone Date" not in df.columns:
+        df["Ops Milestone Date"] = ""
+    df["Ops Milestone Code"] = df["Ops Milestone Code"].fillna("")
+    df["Ops Milestone Date"] = df["Ops Milestone Date"].fillna("")
+    # Respect existing Status/StatusNumeric from Sales; do not override Status here.
+    df["StatusNumeric"] = pd.to_numeric(df.get("StatusNumeric", 99), errors="coerce").fillna(99).astype(int)
     for idx, row in df.iterrows():
         ops_project = _map_alt_to_ops_project(row.get("AltProjectName"), row.get("Project Name"))
         project_key = _normalize_project_id(ops_project)
@@ -208,11 +403,13 @@ def _apply_ops_overrides(df: pd.DataFrame, overrides: dict[tuple[str, str], dict
         if not project_key or not unit_key:
             continue
         override_entry = overrides.get((project_key, unit_key))
-        status_key = _resolve_override_status(override_entry.get("overrides") if override_entry else None)
-        if status_key:
-            df.at[idx, "Status"] = STATUS_KEY_TO_LABEL[status_key]
-            df.at[idx, "StatusNumeric"] = STATUS_KEY_TO_NUMERIC[status_key]
-            continue
+        building_entry = overrides.get((project_key, "#building"))
+        unit_overrides = override_entry.get("overrides") if override_entry else None
+        building_overrides = building_entry.get("overrides") if building_entry else None
+        milestone_code, milestone_date = _resolve_milestone(unit_overrides, building_overrides)
+        if milestone_code:
+            df.at[idx, "Ops Milestone Code"] = milestone_code
+            df.at[idx, "Ops Milestone Date"] = milestone_date
     return df
 
 
@@ -600,20 +797,47 @@ class ReportPDF(FPDF):
         if self.logo_path:
             self.image(self.logo_path, x=self.left_margin, y=10, h=self.logo_height)
             x += 22
+        legend_columns = len(LEGEND_GRID[0])
+        legend_width = legend_columns * LEGEND_CELL_WIDTH
+        legend_height = len(LEGEND_GRID) * LEGEND_CELL_HEIGHT
+        legend_x = self.w - self.right_margin - legend_width
+        legend_y = 10
+        available_title_width = self.w - self.right_margin - x
+        if legend_x - x > LEGEND_SPACING:
+            available_title_width = legend_x - x - LEGEND_SPACING
         self.set_xy(x, 10)
-        self.cell(0, 6, self.title_text)
+        self.cell(available_title_width, 6, self.title_text)
         self.ln(6)
         self.set_x(x)
 
         self.set_font("Helvetica", "", 10)
-        self.cell(0, 5, self.subtitle_text)
-        bottom = 10 + (self.logo_height if self.logo_path else 0)
+        self.cell(available_title_width, 5, self.subtitle_text)
+        legend_bottom = self._draw_header_legend(legend_x, legend_y, legend_height)
+        bottom = max(10 + (self.logo_height if self.logo_path else 0), legend_bottom)
         if self.render_table_header:
             next_y = max(self.get_y(), bottom) + 2
             self.set_y(next_y)
             self._draw_header_row()
         else:
             self.set_y(bottom + 6)
+
+    def _draw_header_legend(self, x: float, y: float, legend_height: float) -> float:
+        self.set_draw_color(0, 0, 0)
+        self.set_text_color(0, 0, 0)
+        self.set_font("Helvetica", "", 6)
+        for row_index, row in enumerate(LEGEND_GRID):
+            for col_index, (label, color) in enumerate(row):
+                cell_x = x + col_index * LEGEND_CELL_WIDTH
+                cell_y = y + row_index * LEGEND_CELL_HEIGHT
+                style = "D"
+                if color:
+                    self.set_fill_color(*color)
+                    style = "FD"
+                self.rect(cell_x, cell_y, LEGEND_CELL_WIDTH, LEGEND_CELL_HEIGHT, style=style)
+                if label:
+                    self.set_xy(cell_x + 1.5, cell_y + 1.4)
+                    self.multi_cell(LEGEND_CELL_WIDTH - 3.0, 2.6, label, border=0)
+        return y + legend_height
 
     def _draw_header_row(self) -> None:
         header_y = self.get_y()
@@ -864,7 +1088,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--title",
-        default="Sales Summary and Transaction Report",
+        default="Sales Transactions & Construction Sequence Summary",
         help="Override the report title.",
     )
     parser.add_argument(
