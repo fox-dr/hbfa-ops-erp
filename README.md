@@ -58,3 +58,12 @@ Start by wrapping the two existing commands and add Fusion as a toggle. Keep the
 
 Open item to verify in code/tests:
 - Confirm status mapping for `Offer - Out for signature` remains `StatusNumeric = 3` end-to-end (import → canonical table → report). Add/adjust test coverage if needed.
+
+## Status Ownership and Ops Overrides
+
+- Current behavior: The report layer can override Status/StatusNumeric via `ops_milestones` based on the priority order `[closed, backlog, offer, inventory, unreleased, projected_coe]`.
+- Policy going forward: Only the Sales UI should set Status and StatusNumeric. The PDF builder should only populate Ops milestone code/date (the B/U series), not change Status/SN.
+- Action items:
+  - Sales UI: ensure StatusNumeric is assigned consistently from Status during import/update.
+  - Ops data: stop using override flags that imply Status (e.g., `inventory`, `unreleased`) and migrate legacy rows away from those flags. If an “Ops Status” is needed, add it explicitly rather than overloading Sales status.
+  - Cleanup: legacy `ops_milestones` entries that still drive Status should be reviewed/normalized. Until then, manual corrections in Ops may be needed to avoid unintended flips (e.g., Pending Release vs Available).
