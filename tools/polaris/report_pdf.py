@@ -823,15 +823,25 @@ def _format_currency(value: object) -> str:
 
 
 def _format_boolean(value: object) -> str:
+    # Render booleans as Y/N, handling numeric 0/1 and string variants.
     if value in (None, ""):
         return ""
+    # Numeric values (including Decimals)
+    if isinstance(value, (int, float, Decimal)):
+        try:
+            return "Y" if float(value) != 0.0 else "N"
+        except Exception:
+            pass
+    # Actual booleans
     if isinstance(value, bool):
-        return "Yes" if value else "No"
+        return "Y" if value else "N"
+    # String representations
     lowered = str(value).strip().lower()
-    if lowered in {"y", "yes", "true", "1"}:
-        return "Yes"
-    if lowered in {"n", "no", "false", "0"}:
-        return "No"
+    if lowered in {"y", "yes", "true", "t", "1", "1.0"}:
+        return "Y"
+    if lowered in {"n", "no", "false", "f", "0", "0.0"}:
+        return "N"
+    # Fallback to original text if unrecognized
     return str(value)
 
 
