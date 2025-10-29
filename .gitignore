@@ -1,15 +1,21 @@
 # OS / editor noise
 Thumbs.db
+*.DS_Store
 *.log
+.idea/
+.vscode/
 
 # Python caches
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Virtualenvs
 .venv/
 venv/
+.python-version
 
 # Reports and large binary exports
 reports/
@@ -18,5 +24,34 @@ reports/
 *.accdb
 *.laccdb
 
+# Node / frontend build artifacts
+node_modules/
+dist/
+.vite/
+build/
+.cache/
+
+# Env files
+.env
+.env.*
+
+# Coverage
+.coverage
+coverage.xml
+
 # Generated JSON snapshots
 ops_milestones_put_requests.json
+
+# Temporary working data and exports
+_xl_tmp/
+tmp_*
+*.tmp
+*.bak
+
+# Root-level data dumps (avoid sweeping source dirs)
+/*.csv
+/*.jsonl
+
+# Large binary assets
+public/floorplans/*.pdf
+dist/floorplans/*.pdf
