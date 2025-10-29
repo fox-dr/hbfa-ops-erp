@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
 from typing import List, Optional, Sequence
 import sys
@@ -64,6 +64,119 @@ def _load_ops_overrides(
             file=sys.stderr,
         )
         return {}
+
+
+def _select_latest_milestone_for_today(
+    overrides_map: dict,
+    codes: tuple[str, ...],
+) -> Optional[tuple[str, str, str]]:
+    """
+    From an overrides map and a sequence of milestone codes (e.g., BUILDING or UNIT),
+    pick the latest milestone whose date is not greater than today.
+
+    Returns (code, key, value) or None if none qualify.
+    """
+    if not isinstance(overrides_map, dict) or not overrides_map:
+        return None
+    today = date.today()
+    candidates: list[tuple[pd.Timestamp, str, str, str]] = []  # (ts, code, key, value)
+    key_map = getattr(legacy_report, "MILESTONE_KEY_MAP", {})  # type: ignore[attr-defined]
+    for code in codes:
+        for key in key_map.get(code, ()):  # type: ignore[index]
+            if key not in overrides_map:
+                continue
+            value = overrides_map.get(key)
+            if value in (None, "", False):
+                continue
+            parsed = pd.to_datetime(value, errors="coerce", utc=True)
+            if pd.isna(parsed):
+                continue
+            parsed_date = parsed.tz_convert("UTC").date()
+            if parsed_date <= today:
+                candidates.append((parsed.tz_convert("UTC"), code, key, str(value)))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: t[0])
+    _, sel_code, sel_key, sel_val = candidates[-1]
+    return sel_code, sel_key, sel_val
+
+
+def _reduce_overrides_asof_today(
+    overrides: dict[tuple[str, str], dict]
+) -> dict[tuple[str, str], dict]:
+    """
+    For each project/unit pair, compute the as-of-today milestone with handoff rules:
+    - If no building milestone (B1..B11) has a date ≤ today: no construction started → blank.
+    - If latest building milestone ≤ today is before B11: use that building milestone.
+    - If latest building milestone is B11: prefer the latest unit milestone (U1..U6) with date ≤ today; if none, keep B11.
+
+    The returned overrides map is reduced so legacy selection picks exactly one milestone per row.
+    """
+    if not overrides:
+        return {}
+
+    result: dict[tuple[str, str], dict] = {}
+
+    # Group by project for convenience
+    projects: dict[str, dict[str, dict]] = {}
+    for (project_key, unit_key), payload in overrides.items():
+        projects.setdefault(project_key, {})[unit_key] = payload
+
+    building_codes = tuple(getattr(legacy_report, "BUILDING_MILESTONE_CODES", ()))  # type: ignore[attr-defined]
+    unit_codes = tuple(getattr(legacy_report, "UNIT_MILESTONE_CODES", ()))  # type: ignore[attr-defined]
+
+    for project_key, entries in projects.items():
+        b_payload = entries.get("#building") or {}
+        b_overrides = b_payload.get("overrides") if isinstance(b_payload, dict) else None
+        b_sel = _select_latest_milestone_for_today(b_overrides or {}, building_codes)
+
+        if b_sel is None:
+            # No construction release yet; milestones remain blank, but still hydrate
+            # Building ID for units when available so the report can display Building.
+            for unit_key, u_payload in entries.items():
+                if unit_key == "#building":
+                    continue
+                if isinstance(u_payload, dict):
+                    result[(project_key, unit_key)] = {
+                        "overrides": {},
+                        "timestamp": u_payload.get("timestamp"),
+                        "building_id": u_payload.get("building_id"),
+                    }
+            continue
+
+        b_code, b_key, b_value = b_sel
+
+        # Always retain the selected building milestone for fallback
+        result[(project_key, "#building")] = {
+            "overrides": {b_key: b_value},
+            "timestamp": b_payload.get("timestamp") if isinstance(b_payload, dict) else None,
+            # Preserve building_id metadata if present
+            "building_id": b_payload.get("building_id") if isinstance(b_payload, dict) else None,
+        }
+
+        # For each unit entry under this project, decide if unit should override
+        for unit_key, u_payload in entries.items():
+            if unit_key == "#building":
+                continue
+            u_overrides = u_payload.get("overrides") if isinstance(u_payload, dict) else None
+            if b_code != "B11":
+                # Still in building phase; ignore unit-level overrides
+                # Do not add unit entry to result so building applies uniformly
+                continue
+            # After B11, allow unit milestones to override if ≤ today
+            u_sel = _select_latest_milestone_for_today(u_overrides or {}, unit_codes)
+            if u_sel is None:
+                # No unit progress ≤ today; keep building (B11) for this unit
+                continue
+            _, u_key, u_value = u_sel
+            result[(project_key, unit_key)] = {
+                "overrides": {u_key: u_value},
+                "timestamp": u_payload.get("timestamp") if isinstance(u_payload, dict) else None,
+                # Carry building_id down to unit entries if available on payload
+                "building_id": u_payload.get("building_id") if isinstance(u_payload, dict) else None,
+            }
+
+    return result
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -137,7 +250,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--title",
-        default="Sales Summary and Transaction Report",
+        default="Sales Transactions & Construction Sequence Summary",
         help="Override the report title.",
     )
     parser.add_argument(
@@ -183,11 +296,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     records = combined_df.to_dict("records")
 
     ops_table = (args.ops_table or "").strip()
-    ops_overrides = _load_ops_overrides(
+    raw_ops_overrides = _load_ops_overrides(
         ops_table,
         region=args.ops_region,
         profile=args.profile,
     )
+    # Apply as-of-today milestone reduction with B→U handoff logic
+    ops_overrides = _reduce_overrides_asof_today(raw_ops_overrides)
 
     original_excluded = getattr(legacy_report, "EXCLUDED_PROJECTS", set())
     legacy_report.EXCLUDED_PROJECTS = set()

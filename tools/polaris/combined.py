@@ -270,9 +270,24 @@ def combine_sources(
         return pd.DataFrame(columns=columns_to_keep)
 
     combined = pd.concat(frames, ignore_index=True)
-    for col in ("Project Name", "Contract Unit Number"):
-        if col in combined.columns:
-            combined[col] = combined[col].fillna("").astype(str).str.strip()
+    # Normalize keys used for de-duplication
+    if "Project Name" in combined.columns:
+        combined["Project Name"] = combined["Project Name"].fillna("").astype(str).str.strip()
+    if "Contract Unit Number" in combined.columns:
+        def _normalize_unit(value):
+            if pd.isna(value):
+                return ""
+            if isinstance(value, (int,)):
+                return str(value)
+            if isinstance(value, float):
+                # Convert 205.0 -> "205" while keeping true decimals as text
+                return str(int(value)) if float(value).is_integer() else str(value).strip()
+            text = str(value).strip()
+            # Collapse strings like "205.0" -> "205"
+            if text.endswith(".0") and text.replace(".0", "").isdigit():
+                return text[:-2]
+            return text
+        combined["Contract Unit Number"] = combined["Contract Unit Number"].map(_normalize_unit)
 
     combined = combined.drop_duplicates(
         subset=["Project Name", "Contract Unit Number"], keep="last"

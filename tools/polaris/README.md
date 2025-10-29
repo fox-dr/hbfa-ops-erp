@@ -41,6 +41,33 @@ tools/
 - `python -m tools.polaris.report_pdf --output reports/mylar.pdf --profile <aws-profile>`
   - Legacy flow: reads `hbfa_PolarisRaw`; kept for historical comparisons.
 - Both require `boto3`, `pandas`, `fpdf2`, `matplotlib` (`pip install boto3 pandas fpdf2 matplotlib`).
+
+## One-Button Orchestrator
+
+- End-to-end normalize → upsert → PDF in a single command:
+  - `python -m tools.polaris.orchestrate_mylar --input d:\hbfa-ops-erp\PolarisExport.xlsx --profile <aws-profile> --output reports\mylar.pdf`
+  - Optional: include the same Polaris file in the PDF merge for side-by-side comparison: add `--also-merge-polaris`.
+  - Optional: control Dynamo upsert behavior with `--overwrite-keys pk sk`.
+
+Notes
+- The `--input` path can be a local `.xlsx` or an `s3://bucket/key.xlsx` URI.
+- Git already ignores Excel files in this repo via `*.xlsx` in `.gitignore`. Local paths outside the repo (e.g., `d:\hbfa-ops-erp\PolarisExport.xlsx`) are not tracked by Git and do not require ignore rules.
+
+### PowerShell Shortcut
+- Convenience wrapper: `scripts\run-mylar.ps1`
+  - Example: `powershell -ExecutionPolicy Bypass -File scripts\run-mylar.ps1 -Profile <aws-profile>`
+  - Parameters:
+    - `-PolarisPath` (default `d:\hbfa-ops-erp\PolarisExport.xlsx`)
+    - `-Output` (defaults to `reports\mylar-YYYY-MM-DD.pdf`)
+    - `-Profile` (AWS profile for DDB access)
+    - `-AlsoMergePolaris` (include the same Excel in the PDF merge)
+    - `-OverwriteKeys pk sk` (pass-through to DynamoDB upsert)
+
+### One-Click Script
+- Zero-arg runner with opinionated defaults: `scripts\run-mylar-oneclick.ps1`
+  - Double-click or run: `powershell -ExecutionPolicy Bypass -File scripts\run-mylar-oneclick.ps1`
+  - Defaults: `Input = d:\hbfa-ops-erp\PolarisExport.xlsx`, output to `reports\mylar-YYYY-MM-DD.pdf`.
+  - Edit the CONFIG section in the script to set an AWS profile if needed; leave blank to use your default credentials/SSO.
 - **Ops milestone key normalization**
   - `python tools/polaris/normalize_ops_keys.py --profile hbfa-secure-uploader`
     - Dry-run (default) scans `ops_milestones`, reporting any rows whose `pk`/`sk` do not match the canonical project/unit format (`SoMi Towns`, `SoMi A`, `SoMi B`, `Fusion`, `Aria`, `Vida`, plus `HayView-###` / `Fusion-###` unit numbers).
@@ -69,6 +96,12 @@ tools/
 - `report_pdf_hso.py` generates the weekly "Mylar" directly from `hbfa_sales_offers` (canonical source). Units marked "Available" remain green unless an explicit override in `ops_milestones` says otherwise.
 - Optional Polaris exports can be merged when you need to backfill the canonical table or compare side-by-side; pass `--polaris path/to/export.xlsx`.
 - `report_pdf.py` remains available as a fallback for the Polaris-only workflow.
+
+### 2025-10-24 – Mylar Ops Milestone Findings
+- `report_pdf_hso.py` already fetches `hbfa_sales_offers`, looks up `ops_milestones`, and pipes both into the legacy builder in `report_pdf.py`, so the integrated path from canonical data → PDF is intact.
+- `_apply_ops_overrides` in `report_pdf.py` only updates `Status` / `StatusNumeric` today; the columns `Ops Milestone Code` and `Ops Milestone Date` are never rewritten, which is why the rendered report shows “N/A” for both fields even when overrides exist.
+- Normalized milestone records (see `ops-normalize-2025-10-23.jsonl`) include per-unit override buckets such as `inventory`, `backlog`, `offer`, plus milestone keys like `drywall_texture` with ISO dates, so the source data is ready once we translate keys into the two-character code/date that Mylar expects.
+- Follow-up: define the mapping from override keys → two-character code/date, update `_apply_ops_overrides` to populate those columns (and optionally add them to `DEFAULT_COLUMNS` in `processing.py`), then add regression coverage to lock the behavior down.
 
 ### Workflow
 - `report_pdf_hso.py` scans `hbfa_sales_offers` (default region us-east-2) using the supplied AWS profile (needs `dynamodb:Scan` on the table and CMK decrypt if applicable).
@@ -164,3 +197,23 @@ python -m tools.polaris.report_pdf_hso ^
 - Added the combined dataset builder and `report_pdf_hso` so Mylar is generated from `hbfa_sales_offers` with optional Polaris backfill.
 - Removed the legacy "inventory → pending release" fallback; inventory rows now retain their status unless an Ops override explicitly changes it.
 - Legacy `report_pdf.py` remains for historical comparisons but no longer forces Fusion/inventory demotions.
+
+#workplan for 10/24/25
+
+**Findings**
+- `report_pdf_hso.py` already feeds `hbfa_sales_offers` plus `ops_milestones` into `report_pdf.py`; the integration path is live, but `_apply_ops_overrides` only adjusts `Status`/`StatusNumeric`, leaving the `Ops Milestone Code` and `Ops Milestone Date` columns blank.
+- Normalized ops snapshots (for example `ops-normalize-2025-10-23.jsonl`) show the expected override keys (`inventory`, `backlog`, `offer`, milestone names such as `drywall_texture`, `buyer_orientation`, etc.) with ISO dates; we just need the canonical two-character code mapping so the PDF can surface them.
+- Ops data stewardship is shifting: Devon has paused Smartsheet updates and is willing to move into the in-app workflow, which gives us a short window to replace Smartsheets entirely and cut the related licensing spend.
+- Existing tooling (`ops_milestones_from_excel.py`, `normalize_ops_keys.py`) can preload and normalize his template data so the UI/demo reflects real values on day one.
+
+**Plan**
+- Capture the override-key -> Ops MS code/date mapping, then extend `_apply_ops_overrides` (and supporting constants) to populate both `Ops Milestone Code` and `Ops Milestone Date`; add regression coverage to lock behavior.
+- Run `normalize_ops_keys.py` (dry-run, then apply with backup) on the current dataset, confirm Mylar output reflects the cleaned overrides, and document the runbook.
+- Prepare a guided walkthrough for Devon: ingest his latest Smartsheet extract, enter a few live updates via the UI, and collect any blocking feedback before the final cutover.
+- Coordinate the switchover: freeze Smartsheet edits, migrate remaining rows into Dynamo, route Ops to the new form, and monitor the first full-week cycle in Mylar to prove the replacement.
+
+**Prompt to get current**
+```
+You are picking up the Polaris -> Mylar alignment on 2025-10-24. Read the "2025-10-24 - Mylar Ops Milestone Findings" section, finalize the override key -> Ops MS code mapping, update tools/polaris/report_pdf.py so Ops MS / MS Date populate from ops_milestones, then rerun python -m tools.polaris.report_pdf_hso to validate the PDF before sharing with Ops.
+```
+

@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 import json
+import os
 import logging
 import sys
 import boto3
@@ -195,7 +196,7 @@ EXCLUDED_PROJECTS = {"fusion"}
 ALT_PROJECT_TO_OPS: dict[str, str] = {
     "aria": "Aria",
     "fusion": "Fusion",
-    "somi towns": "SoMi Haypark",
+    "somi towns": "SoMi Towns",
     "somi condos": "SoMi HayView",
     "somi hayview": "SoMi HayView",
     "somi haypark": "SoMi Haypark",
@@ -282,6 +283,18 @@ def _parse_iso8601(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _unwrap_attr(value: object) -> object:
+    """
+    Best-effort unwrap for DynamoDB low-level attribute maps, e.g., {"S": "text"}.
+    If the value is a dict with a single key among common DynamoDB types, return the inner value.
+    Leaves complex types (M/L) unchanged.
+    """
+    if isinstance(value, dict) and len(value) == 1:
+        key = next(iter(value))
+        if key in {"S", "N", "BOOL", "NULL"}:
+            return value[key]
+    return value
+
 def _resolve_override_status(overrides: Optional[dict]) -> Optional[str]:
     if not overrides or not isinstance(overrides, dict):
         return None
@@ -330,15 +343,15 @@ def _resolve_milestone(
 def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], dict]:
     index: dict[tuple[str, str], dict] = {}
     for raw in items:
-        project_id = raw.get("project_id") or ""
-        unit_number = raw.get("unit_number") or raw.get("sk")
-        pk = raw.get("pk")
+        project_id = _unwrap_attr(raw.get("project_id")) or ""
+        unit_number = _unwrap_attr(raw.get("unit_number")) or _unwrap_attr(raw.get("sk"))
+        pk = _unwrap_attr(raw.get("pk"))
         if not project_id and pk and "#" in pk:
             project_id = pk.split("#", 1)[0]
         project_key = _normalize_project_id(project_id)
         if not project_key:
             continue
-        data = raw.get("data")
+        data = _unwrap_attr(raw.get("data"))
         if isinstance(data, str):
             try:
                 data = json.loads(data)
@@ -346,7 +359,7 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
                 continue
         if not isinstance(data, dict):
             continue
-        timestamp = _parse_iso8601(raw.get("updated_at"))
+        timestamp = _parse_iso8601(_unwrap_attr(raw.get("updated_at")))
         candidates: List[tuple[str, dict]] = []
         building_payload = data.get("building")
         if isinstance(building_payload, dict):
@@ -359,9 +372,36 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
             if isinstance(unit_overrides, dict) and unit_overrides:
                 unit_id = unit_payload.get("unit_number") or unit_number
                 if unit_id is None:
-                    unit_id = raw.get("sk")
+                    unit_id = _unwrap_attr(raw.get("sk"))
                 if unit_id is not None:
                     candidates.append((str(unit_id), unit_overrides))
+        # attempt to capture building_id from various possible locations
+        building_id_value = None
+        try:
+            if isinstance(building_payload, dict):
+                building_id_value = building_payload.get("building_id") or building_payload.get("buildingId")
+            if not building_id_value and isinstance(unit_payload, dict):
+                building_id_value = unit_payload.get("building_id") or unit_payload.get("buildingId")
+            if not building_id_value:
+                building_id_value = _unwrap_attr(raw.get("building_id") or raw.get("buildingId"))
+        except Exception:
+            building_id_value = None
+        building_id_value = _unwrap_attr(building_id_value)
+        # If there are no milestone overrides but we have a building_id and a unit_number,
+        # create a metadata-only entry so the report can hydrate the Building column.
+        if not candidates and building_id_value:
+            unit_fallback = _normalize_unit_number(unit_number)
+            if unit_fallback:
+                key = (project_key, unit_fallback)
+                existing = index.get(key)
+                existing_ts = existing.get("timestamp") if existing else None
+                if not existing or (existing_ts and timestamp and existing_ts < timestamp):
+                    index[key] = {
+                        "overrides": {},
+                        "timestamp": timestamp,
+                        "building_id": building_id_value,
+                    }
+            continue
         if not candidates:
             continue
         for raw_unit_key, ov in candidates:
@@ -380,6 +420,7 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
             index[key] = {
                 "overrides": ov,
                 "timestamp": timestamp,
+                "building_id": building_id_value,
             }
     return index
 
@@ -392,24 +433,89 @@ def _apply_ops_overrides(df: pd.DataFrame, overrides: dict[tuple[str, str], dict
         df["Ops Milestone Code"] = ""
     if "Ops Milestone Date" not in df.columns:
         df["Ops Milestone Date"] = ""
+    # Ensure columns for display and compatibility
+    if "building_id" not in df.columns:
+        df["building_id"] = ""
+    # Also support legacy/lowercase field name if present in downstream consumers
+    if "builder" not in df.columns:
+        df["builder"] = ""
     df["Ops Milestone Code"] = df["Ops Milestone Code"].fillna("")
     df["Ops Milestone Date"] = df["Ops Milestone Date"].fillna("")
+    df["building_id"] = df["building_id"].fillna("")
+    df["builder"] = df["builder"].fillna("")
     # Respect existing Status/StatusNumeric from Sales; do not override Status here.
     df["StatusNumeric"] = pd.to_numeric(df.get("StatusNumeric", 99), errors="coerce").fillna(99).astype(int)
+    debug_ops = bool(os.getenv("HBFA_DEBUG_OPS"))
     for idx, row in df.iterrows():
-        ops_project = _map_alt_to_ops_project(row.get("AltProjectName"), row.get("Project Name"))
-        project_key = _normalize_project_id(ops_project)
+        # Build a robust set of possible project keys to match overrides, to avoid mismatches
+        # from name mapping differences (e.g., "SoMi Towns" vs "SoMi Haypark").
+        raw_alt = row.get("AltProjectName")
+        raw_name = row.get("Project Name")
+        mapped = _map_alt_to_ops_project(raw_alt, raw_name)
+        candidate_projects = []
+        for candidate in (raw_alt, raw_name, mapped):
+            key = _normalize_project_id(candidate)
+            if key and key not in candidate_projects:
+                candidate_projects.append(key)
         unit_key = _normalize_unit_number(row.get("Contract Unit Number"))
-        if not project_key or not unit_key:
+        if not candidate_projects or not unit_key:
             continue
-        override_entry = overrides.get((project_key, unit_key))
-        building_entry = overrides.get((project_key, "#building"))
+        # Build candidate unit keys to match ops (strip prefixes like "HayView-306")
+        candidate_units: List[str] = []
+        candidate_units.append(unit_key)
+        unit_text = str(unit_key)
+        # after last hyphen
+        if "-" in unit_text:
+            tail = unit_text.split("-")[-1]
+            if tail not in candidate_units:
+                candidate_units.append(tail)
+        # extract last numeric run
+        import re as _re
+        m = _re.search(r"(\d+)$", unit_text)
+        if m:
+            digits = m.group(1)
+            if digits not in candidate_units:
+                candidate_units.append(digits)
+        # Try to find a matching overrides entry using any candidate project key
+        override_entry = None
+        building_entry = None
+        for pj in candidate_projects:
+            if building_entry is None:
+                building_entry = overrides.get((pj, "#building"))
+            if override_entry is None:
+                for uk in candidate_units:
+                    override_entry = overrides.get((pj, uk))
+                    if override_entry:
+                        break
+            if override_entry and building_entry:
+                break
         unit_overrides = override_entry.get("overrides") if override_entry else None
         building_overrides = building_entry.get("overrides") if building_entry else None
         milestone_code, milestone_date = _resolve_milestone(unit_overrides, building_overrides)
         if milestone_code:
             df.at[idx, "Ops Milestone Code"] = milestone_code
             df.at[idx, "Ops Milestone Date"] = milestone_date
+        # populate Building column from overrides metadata if available
+        building_id = None
+        if override_entry and isinstance(override_entry, dict):
+            building_id = override_entry.get("building_id") or building_id
+        if not building_id and building_entry and isinstance(building_entry, dict):
+            building_id = building_entry.get("building_id")
+        if building_id:
+            df.at[idx, "building_id"] = str(building_id)
+            df.at[idx, "builder"] = str(building_id)
+        elif debug_ops:
+            found_keys = []
+            for pj in candidate_projects:
+                for uk in candidate_units:
+                    if (pj, uk) in overrides:
+                        found_keys.append(f"{pj}#{uk}")
+                if (pj, "#building") in overrides:
+                    found_keys.append(f"{pj}#(building)")
+            print(
+                f"[OPS DEBUG] idx={idx} unit={unit_key} alt={raw_alt} proj={raw_name} mapped={mapped} candidates={candidate_projects} matched={found_keys} building_id=None ms=({milestone_code},{milestone_date})",
+                file=sys.stderr,
+            )
     return df
 
 
@@ -647,7 +753,8 @@ BOOLEAN_FIELDS = {
 # Include Ops milestone placeholders at the far right; widths still leave room for future fields.
 TABLE_COLUMNS: Sequence[ColumnConfig] = (
     ColumnConfig("AltProjectName", "Project", 22.0),
-    ColumnConfig("Contract Unit Number", "Unit", 19.0),
+    ColumnConfig("Contract Unit Number", "Homesite", 19.0),
+    ColumnConfig("building_id", "Building", 18.0),
     ColumnConfig("Status", "Status", 22.0),
     ColumnConfig("Buyer Contract: COE Date", "COE Date", 17.0),
     ColumnConfig("Buyers Combined", "Buyers Combined", 34.0),

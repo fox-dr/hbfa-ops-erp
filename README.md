@@ -65,5 +65,90 @@ Open item to verify in code/tests:
 - Policy going forward: Only the Sales UI should set Status and StatusNumeric. The PDF builder should only populate Ops milestone code/date (the B/U series), not change Status/SN.
 - Action items:
   - Sales UI: ensure StatusNumeric is assigned consistently from Status during import/update.
-  - Ops data: stop using override flags that imply Status (e.g., `inventory`, `unreleased`) and migrate legacy rows away from those flags. If an “Ops Status” is needed, add it explicitly rather than overloading Sales status.
+  - Ops data: stop using override flags that imply Status (e.g., `inventory`, `unreleased`) and migrate legacy rows away from those flags. If an "Ops Status" is needed, add it explicitly rather than overloading Sales status.
   - Cleanup: legacy `ops_milestones` entries that still drive Status should be reviewed/normalized. Until then, manual corrections in Ops may be needed to avoid unintended flips (e.g., Pending Release vs Available).
+
+## HSO Report: Ops Milestones Selection Logic
+
+- Scope: Applies to `tools/polaris/report_pdf_hso.py` when reading `ops_milestones`.
+- Building-only: Only building-level milestones (`unit_key = "#building"`) are considered; unit-level entries are ignored for the HSO report.
+- As-of-today filter: From all building milestones, select the latest milestone whose date is not greater than today (on-the-ground view).
+- Blank if none: If no building milestone date is ≤ today, the "Ops MS" and "MS Date" cells are left blank.
+- No status changes: This logic only populates the Ops milestone code/date columns and does not alter Status/StatusNumeric.
+
+## PDF Columns Update
+
+- Added a new `Building` column between `Homesite` and `Status`.
+- Renamed `Unit` column header to `Homesite`.
+- The `Building` value is sourced from `ops_milestones` (`building_id`) and is populated when available.
+- There is sufficient space on the page; other columns keep their widths. No change to data export commands.
+
+## Ops Milestones + Building ID Details
+
+- As‑of‑today milestones:
+  - Only milestones with a date ≤ today are considered to reflect on‑the‑ground status.
+  - B→U handoff: if the latest building milestone ≤ today is B11, unit milestones (U1–U6) take precedence per unit; otherwise, show the latest qualifying building milestone; if none qualify, cells remain blank (construction not started).
+
+- Building ID hydration in PDF:
+  - The PDF column key is `building_id` (header shows “Building”).
+  - `building_id` is pulled from `ops_milestones` for each unit, even when there are no milestone overrides, so Building appears without requiring a milestone.
+  - A compatibility field `builder` is also populated with the same value for downstream consumers expecting that key.
+
+- Robust DynamoDB parsing:
+  - The report unpacks low‑level DynamoDB attribute maps (e.g., `{ "S": "…" }`) for fields like `pk`, `sk`, `project_id`, `unit_number`, `building_id`, `data`, and `updated_at` before processing.
+  - Milestone payloads in `data` are JSON‑decoded after unwrapping.
+
+- Unit key matching:
+  - When looking up unit overrides and building metadata, the report tries multiple unit key variants to match ops data: the full unit key, the suffix after the last dash, and trailing digits (e.g., `HayView-306` → `306`).
+
+- HSO reducer behavior (when generating via `report_pdf_hso.py`):
+  - Applies the as‑of‑today B→U handoff.
+  - Preserves and emits `building_id` for units even if the project has no building milestones ≤ today, so Building still shows in the PDF while milestone cells remain blank.
+
+- Debugging lookups (optional):
+  - Set `HBFA_DEBUG_OPS=1` to print per‑row diagnostics to stderr showing candidate project keys, matched override keys, and whether a `building_id` was found.
+
+## Bootstrap or Reload Ops Milestones from CSV
+
+- Convert CSV → PutRequests JSON:
+  - Command:
+    - `python -m tools.polaris.csv_to_ops_puts d:\\downloads\\hbfa-ops\\aria_ops_milestones.csv d:\\downloads\\hbfa-ops-erp\\aria_ops_puts.json --project Aria`
+  - CSV headers supported: `project_id` (optional if `--project` given), `building_id`, `unit_number`.
+  - Optional per‑row milestone/date: add `milestone` and `date` to include a single override; omit to leave milestones blank (not started).
+
+- Load into DynamoDB:
+  - Command:
+    - `python -m tools.polaris.load_ops_milestones d:\\downloads\\hbfa-ops-erp\\aria_ops_puts.json --table-name ops_milestones --region us-west-1 --profile <aws-profile>`
+  - Dry‑run suggestion: inspect `aria_ops_puts.json` before loading. If you need a full dry‑run, load to a temporary table name (e.g., `ops_milestones_staging`) and verify via the report with `--ops-table ops_milestones_staging`.
+
+- Verify in PDF:
+  - Run `report_pdf_hso`; Building hydrates from `building_id` even if milestones are blank.
+
+## Import Canonical Rows into hbfa_sales_offers (Aria)
+
+- Import CSV using the existing HBFASales importer:
+  - Repo: `D:\Downloads\HBFASales\hbfa-sales-ui`
+  - Command (example):
+    - `node scripts\import-hbfa-sales-offers.mjs --file="D:\Downloads\HBFASales\hbfa-sales-ui\aria_hbfa_sales_offers.csv" --project=Aria`
+  - Environment:
+    - `AWS_REGION` defaults to `us-east-2` (set if needed).
+    - `AWS_PROFILE` if you use profiles.
+  - CSV expectations (minimum):
+    - `Project Name` or `AltProjectName` = `Aria`
+    - `Contract Unit Number` = homesite (numeric)
+    - `Status` and `StatusNumeric` (e.g., `Pending Release`, `5`)
+  - Dry‑run guidance:
+    - If the importer supports `--dry-run`, use it first. Otherwise, test with a small subset CSV (2–3 rows), verify in the console, then load the full file.
+
+- Generate the Mylar after imports:
+  - Command:
+    - `python -m tools.polaris.report_pdf_hso --output "D:\\Downloads\\hbfa-ops-erp\\reports\\mylar-YYYY-MM-DD.pdf"`
+  - Notes:
+    - The report combines hbfa_sales_offers (canonical) with ops_milestones (Building/milestones). Ensure unit numbers and project names align (unit numbers numeric; project `Aria`).
+
+### Quick Subset Generator (for dry-run tests)
+
+- Create a small (e.g., 3-row) subset of a larger CSV while keeping headers:
+  - Command (example):
+    - `python -m tools.polaris.csv_subset D:\\Downloads\\HBFASales\\hbfa-sales-ui\\aria_hbfa_sales_offers.csv D:\\Downloads\\hbfa-ops-erp\\aria_subset.csv --rows 3`
+  - Use the subset file with your importer’s dry-run (if supported) or as a minimal live test before loading the full dataset.
