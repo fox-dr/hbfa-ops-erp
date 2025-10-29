@@ -76,6 +76,9 @@ Open item to verify in code/tests:
 - Blank if none: If no building milestone date is ≤ today, the "Ops MS" and "MS Date" cells are left blank.
 - No status changes: This logic only populates the Ops milestone code/date columns and does not alter Status/StatusNumeric.
 
+- Formatting:
+  - Boolean fields (e.g., `Cash?`) render as `Y`/`N` in both the standard and HSO PDFs. Numeric variants like `0/1` or `0.0/1.0` are coerced accordingly.
+
 ## PDF Columns Update
 
 - Added a new `Building` column between `Homesite` and `Status`.
