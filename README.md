@@ -82,6 +82,9 @@ Open item to verify in code/tests:
 - Renamed `Unit` column header to `Homesite`.
 - The `Building` value is sourced from `ops_milestones` (`building_id`) and is populated when available.
 - There is sufficient space on the page; other columns keep their widths. No change to data export commands.
+- The `Cash?` column now renders as `Y`/`N` instead of numeric `1.0`/`0.0`.
+  - Accepts booleans, numeric `0/1` (including `0.0/1.0`, `Decimal`), and common string forms (`yes/no`, `true/false`, `y/n`).
+  - Any unrecognized value is passed through unchanged.
 
 ## Ops Milestones + Building ID Details
 
