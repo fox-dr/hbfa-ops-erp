@@ -158,3 +158,30 @@ Open item to verify in code/tests:
   - Command (example):
     - `python -m tools.polaris.csv_subset D:\\Downloads\\HBFASales\\hbfa-sales-ui\\aria_hbfa_sales_offers.csv D:\\Downloads\\hbfa-ops-erp\\aria_subset.csv --rows 3`
   - Use the subset file with your importer’s dry-run (if supported) or as a minimal live test before loading the full dataset.
+## Legacy Polaris Preprocessor Scripts
+
+Reference copies of the historical Excel processors live under `C:\Users\foxda\OneDrive\Documents\PythonScripts`. Keep these handy while the new orchestration is wired up:
+- `ExtractPolaris.py`
+- `ExtractPolaris2Files.py`
+- `ExtractPolarisConst.py`
+- `ExtractPolarisContract.py`
+- `ExtractPolarisFull.V.1.py`
+- `ExtractPolarisFull.V.2.py`
+- `ExtractPolarisFull.V.3.py`
+- `ExtractPolarisFull.V.4.py`
+- `ExtractPolarisFull.V.5.py`
+- `ExtractPolarisFull.V.7.py`
+- `ExtractPolarisFull.V.7.1.py`
+- `ExtractPolarisFull.V.7.2.py`
+- `ExtractPolarisFull.V.7.3.py`
+- `ExtractPolarisFull.V.7.4.py`
+- `ExtractPolarisFull.V.8.py`
+- `ExtractPolarisFull.V.8.1.py`
+- `ExtractPolarisFull.V.8.2.noover 8.1.py`
+- `ExtractPolarisFull.V.8.3.py`
+- `ExtractPolarisUnit.py`
+- `ExtractPolarisUnit.V.2.py`
+- `ExtractPolarisUnit.V.3.py`
+- `ExtractPolarisWeekUpdate.py`
+- `ExtractPolarisWeekUpdate.V.2.py`
+- `ExtractPolarisWeekUpdate.V.3.py`
