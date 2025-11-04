@@ -57,6 +57,14 @@ You are picking up the weekly Polaris → Mylar consolidation. Build a single de
 Start by wrapping the two existing commands and add Fusion as a toggle. Keep the initial email save as a manual step.
 
 Open item to verify in code/tests:
+## Work plan (2025-11-04)
+- Get Ops milestones into Fusion's Mylar without re-importing stale Fusion status rows.
+- Explore an orchestrator-style flow that accepts the Fusion-filtered `Polaris_Processed` output so normalization/import stay optional.
+- Update TrackingForm and the Netlify offers handler so entering `week_ratified_date` also sets `StatusNumeric = 2` and `is_immutable = 1`.
+- Document the Monday checklist (file path, command, timeline endpoint check) so the weekly runner can verify Fusion quickly.
+- Add guardrails/tests to keep Fusion excluded unless explicitly toggled back on.
+
+
 - Confirm status mapping for `Offer - Out for signature` remains `StatusNumeric = 3` end-to-end (import → canonical table → report). Add/adjust test coverage if needed.
 
 ## Status Ownership and Ops Overrides
@@ -158,7 +166,7 @@ Open item to verify in code/tests:
   - Command (example):
     - `python -m tools.polaris.csv_subset D:\\Downloads\\HBFASales\\hbfa-sales-ui\\aria_hbfa_sales_offers.csv D:\\Downloads\\hbfa-ops-erp\\aria_subset.csv --rows 3`
   - Use the subset file with your importer’s dry-run (if supported) or as a minimal live test before loading the full dataset.
-## Legacy Polaris Preprocessor Scripts
+`## Legacy Polaris Preprocessor Scripts
 
 Reference copies of the historical Excel processors live under `C:\Users\foxda\OneDrive\Documents\PythonScripts`. Keep these handy while the new orchestration is wired up:
 - `ExtractPolaris.py`
@@ -185,3 +193,5 @@ Reference copies of the historical Excel processors live under `C:\Users\foxda\O
 - `ExtractPolarisWeekUpdate.py`
 - `ExtractPolarisWeekUpdate.V.2.py`
 - `ExtractPolarisWeekUpdate.V.3.py`
+
+
