@@ -38,6 +38,7 @@ tools/
 - PDF generators
 - `python -m tools.polaris.report_pdf_hso --output reports/mylar.pdf --profile <aws-profile>`
   - Primary flow: reads `hbfa_sales_offers`, optionally merges a Polaris export, applies `ops_milestones` overrides, and renders the Mylar PDF.
+- Ops milestone overrides are keyed by canonical project + building + unit so a building refresh only touches its own rows.
 - `python -m tools.polaris.report_pdf --output reports/mylar.pdf --profile <aws-profile>`
   - Legacy flow: reads `hbfa_PolarisRaw`; kept for historical comparisons.
 - Both require `boto3`, `pandas`, `fpdf2`, `matplotlib` (`pip install boto3 pandas fpdf2 matplotlib`).

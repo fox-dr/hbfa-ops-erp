@@ -191,7 +191,7 @@ BASE_PROJECT_COLORS = [
 
 log = logging.getLogger(__name__)
 
-EXCLUDED_PROJECTS = {"fusion"}
+# EXCLUDED_PROJECTS = {"fusion"}
 
 ALT_PROJECT_TO_OPS: dict[str, str] = {
     "aria": "Aria",
@@ -249,6 +249,21 @@ def _normalize_unit_number(value: object) -> Optional[str]:
     if numeric.is_integer():
         return str(int(numeric))
     return text
+
+
+def _normalize_building_id(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    normalized = "".join(ch for ch in text.lower() if ch.isalnum())
+    return normalized or None
+
+
+def _build_building_lookup_key(normalized: Optional[str]) -> str:
+    suffix = normalized or "unknown"
+    return f"#building::{suffix}"
 
 
 def _normalize_project_id(value: object) -> str:
@@ -360,22 +375,8 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
         if not isinstance(data, dict):
             continue
         timestamp = _parse_iso8601(_unwrap_attr(raw.get("updated_at")))
-        candidates: List[tuple[str, dict]] = []
         building_payload = data.get("building")
-        if isinstance(building_payload, dict):
-            building_overrides = building_payload.get("overrides")
-            if isinstance(building_overrides, dict) and building_overrides:
-                candidates.append(("#building", building_overrides))
         unit_payload = data.get("unit")
-        if isinstance(unit_payload, dict):
-            unit_overrides = unit_payload.get("overrides")
-            if isinstance(unit_overrides, dict) and unit_overrides:
-                unit_id = unit_payload.get("unit_number") or unit_number
-                if unit_id is None:
-                    unit_id = _unwrap_attr(raw.get("sk"))
-                if unit_id is not None:
-                    candidates.append((str(unit_id), unit_overrides))
-        # attempt to capture building_id from various possible locations
         building_id_value = None
         try:
             if isinstance(building_payload, dict):
@@ -387,9 +388,48 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
         except Exception:
             building_id_value = None
         building_id_value = _unwrap_attr(building_id_value)
+        normalized_building_id = _normalize_building_id(building_id_value)
+        building_lookup_key = _build_building_lookup_key(normalized_building_id)
+
+        # Capture building-level overrides per building_id to avoid collisions across buildings.
+        if isinstance(building_payload, dict):
+            building_overrides = building_payload.get("overrides")
+            if isinstance(building_overrides, dict) and building_overrides:
+                key = (project_key, building_lookup_key)
+                existing = index.get(key)
+                existing_ts = existing.get("timestamp") if existing else None
+                if not existing or (existing_ts and timestamp and existing_ts < timestamp):
+                    index[key] = {
+                        "overrides": building_overrides,
+                        "timestamp": timestamp,
+                        "building_id": building_id_value,
+                        "normalized_building_id": normalized_building_id,
+                    }
+
+        unit_entry_recorded = False
+        if isinstance(unit_payload, dict):
+            unit_overrides = unit_payload.get("overrides")
+            if isinstance(unit_overrides, dict) and unit_overrides:
+                unit_id = unit_payload.get("unit_number") or unit_number
+                if unit_id is None:
+                    unit_id = _unwrap_attr(raw.get("sk"))
+                unit_key = _normalize_unit_number(unit_id)
+                if unit_key:
+                    key = (project_key, unit_key)
+                    existing = index.get(key)
+                    existing_ts = existing.get("timestamp") if existing else None
+                    if not existing or (existing_ts and timestamp and existing_ts < timestamp):
+                        index[key] = {
+                            "overrides": unit_overrides,
+                            "timestamp": timestamp,
+                            "building_id": building_id_value,
+                            "normalized_building_id": normalized_building_id,
+                        }
+                        unit_entry_recorded = True
+
         # If there are no milestone overrides but we have a building_id and a unit_number,
         # create a metadata-only entry so the report can hydrate the Building column.
-        if not candidates and building_id_value:
+        if not unit_entry_recorded and building_id_value:
             unit_fallback = _normalize_unit_number(unit_number)
             if unit_fallback:
                 key = (project_key, unit_fallback)
@@ -400,28 +440,8 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
                         "overrides": {},
                         "timestamp": timestamp,
                         "building_id": building_id_value,
+                        "normalized_building_id": normalized_building_id,
                     }
-            continue
-        if not candidates:
-            continue
-        for raw_unit_key, ov in candidates:
-            if raw_unit_key == "#building":
-                unit_key = "#building"
-            else:
-                unit_key = _normalize_unit_number(raw_unit_key)
-                if not unit_key:
-                    continue
-            key = (project_key, unit_key)
-            existing = index.get(key)
-            if existing:
-                existing_ts = existing.get("timestamp")
-                if existing_ts and timestamp and existing_ts >= timestamp:
-                    continue
-            index[key] = {
-                "overrides": ov,
-                "timestamp": timestamp,
-                "building_id": building_id_value,
-            }
     return index
 
 
@@ -446,6 +466,11 @@ def _apply_ops_overrides(df: pd.DataFrame, overrides: dict[tuple[str, str], dict
     # Respect existing Status/StatusNumeric from Sales; do not override Status here.
     df["StatusNumeric"] = pd.to_numeric(df.get("StatusNumeric", 99), errors="coerce").fillna(99).astype(int)
     debug_ops = bool(os.getenv("HBFA_DEBUG_OPS"))
+    build_key_factory = getattr(
+        legacy_report,
+        "_build_building_lookup_key",
+        lambda normalized: f"#building::{normalized or 'unknown'}",
+    )
     for idx, row in df.iterrows():
         # Build a robust set of possible project keys to match overrides, to avoid mismatches
         # from name mapping differences (e.g., "SoMi Towns" vs "SoMi Haypark").
@@ -478,17 +503,35 @@ def _apply_ops_overrides(df: pd.DataFrame, overrides: dict[tuple[str, str], dict
                 candidate_units.append(digits)
         # Try to find a matching overrides entry using any candidate project key
         override_entry = None
-        building_entry = None
+        override_project_key = None
         for pj in candidate_projects:
-            if building_entry is None:
-                building_entry = overrides.get((pj, "#building"))
-            if override_entry is None:
-                for uk in candidate_units:
-                    override_entry = overrides.get((pj, uk))
-                    if override_entry:
-                        break
-            if override_entry and building_entry:
+            for uk in candidate_units:
+                candidate_entry = overrides.get((pj, uk))
+                if candidate_entry:
+                    override_entry = candidate_entry
+                    override_project_key = pj
+                    break
+            if override_entry:
                 break
+
+        normalized_building = (
+            override_entry.get("normalized_building_id")
+            if override_entry and isinstance(override_entry, dict)
+            else None
+        )
+        building_entry = None
+        if candidate_projects:
+            search_projects = [override_project_key] if override_project_key else []
+            search_projects.extend([pj for pj in candidate_projects if pj not in search_projects])
+            for pj in search_projects:
+                if normalized_building:
+                    key = build_key_factory(normalized_building)
+                    building_entry = overrides.get((pj, key))
+                    if building_entry:
+                        break
+                building_entry = overrides.get((pj, "#building"))
+                if building_entry:
+                    break
         unit_overrides = override_entry.get("overrides") if override_entry else None
         building_overrides = building_entry.get("overrides") if building_entry else None
         milestone_code, milestone_date = _resolve_milestone(unit_overrides, building_overrides)
@@ -510,8 +553,9 @@ def _apply_ops_overrides(df: pd.DataFrame, overrides: dict[tuple[str, str], dict
                 for uk in candidate_units:
                     if (pj, uk) in overrides:
                         found_keys.append(f"{pj}#{uk}")
-                if (pj, "#building") in overrides:
-                    found_keys.append(f"{pj}#(building)")
+                for key_tuple in overrides.keys():
+                    if key_tuple[0] == pj and isinstance(key_tuple[1], str) and key_tuple[1].startswith("#building"):
+                        found_keys.append(f"{pj}#{key_tuple[1]}")
             print(
                 f"[OPS DEBUG] idx={idx} unit={unit_key} alt={raw_alt} proj={raw_name} mapped={mapped} candidates={candidate_projects} matched={found_keys} building_id=None ms=({milestone_code},{milestone_date})",
                 file=sys.stderr,
