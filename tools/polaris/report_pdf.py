@@ -466,8 +466,9 @@ def _apply_ops_overrides(df: pd.DataFrame, overrides: dict[tuple[str, str], dict
     # Respect existing Status/StatusNumeric from Sales; do not override Status here.
     df["StatusNumeric"] = pd.to_numeric(df.get("StatusNumeric", 99), errors="coerce").fillna(99).astype(int)
     debug_ops = bool(os.getenv("HBFA_DEBUG_OPS"))
+    module = sys.modules[__name__]
     build_key_factory = getattr(
-        legacy_report,
+        module,
         "_build_building_lookup_key",
         lambda normalized: f"#building::{normalized or 'unknown'}",
     )
