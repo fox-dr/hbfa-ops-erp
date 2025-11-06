@@ -170,6 +170,7 @@ def _reduce_overrides_asof_today(
                     "building_id": building_id,
                     "normalized_building_id": normalized_building,
                     "pre_kickoff": False,
+                    "ops_projected_coe": b_payload.get("ops_projected_coe") if isinstance(b_payload, dict) else None,
                 }
                 building_selection[b_key] = {
                     "code": None,
@@ -185,6 +186,7 @@ def _reduce_overrides_asof_today(
                 "building_id": building_id,
                 "normalized_building_id": normalized_building,
                 "pre_kickoff": False,
+                "ops_projected_coe": b_payload.get("ops_projected_coe") if isinstance(b_payload, dict) else None,
             }
             building_selection[b_key] = {
                 "code": b_code,
@@ -207,6 +209,7 @@ def _reduce_overrides_asof_today(
                 "building_id": None,
                 "normalized_building_id": None,
                 "pre_kickoff": False,
+                "ops_projected_coe": None,
             }
 
         for unit_key, u_payload in entries.items():
@@ -242,6 +245,7 @@ def _reduce_overrides_asof_today(
                 "building_id": u_payload.get("building_id") or building_payload.get("building_id"),
                 "normalized_building_id": unit_building_norm or building_payload.get("normalized_building_id"),
                 "pre_kickoff": combined_pre_kickoff,
+                "ops_projected_coe": u_payload.get("ops_projected_coe") if isinstance(u_payload, dict) else building_payload.get("ops_projected_coe"),
             }
 
             if combined_pre_kickoff:
@@ -262,6 +266,7 @@ def _reduce_overrides_asof_today(
                 "building_id": u_payload.get("building_id") or building_payload.get("building_id"),
                 "normalized_building_id": unit_building_norm or building_payload.get("normalized_building_id"),
                 "pre_kickoff": False,
+                "ops_projected_coe": u_payload.get("ops_projected_coe") if isinstance(u_payload, dict) else building_payload.get("ops_projected_coe"),
             }
 
     return result

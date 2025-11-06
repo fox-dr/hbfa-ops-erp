@@ -622,17 +622,15 @@ def _apply_ops_overrides(df: pd.DataFrame, overrides: dict[tuple[str, str], dict
         building_projected_coe_meta = building_entry.get("ops_projected_coe") if isinstance(building_entry, dict) else None
         skip_milestones = unit_pre_kickoff or building_pre_kickoff
         milestone_code = milestone_date = None
-        ops_coe = None
+        ops_coe = unit_projected_coe_meta or building_projected_coe_meta
         if not skip_milestones:
             milestone_code, milestone_date = _resolve_milestone(unit_overrides, building_overrides)
-            ops_coe = unit_projected_coe_meta or building_projected_coe_meta or _resolve_ops_coe(unit_overrides, building_overrides)
+            if ops_coe is None:
+                ops_coe = _resolve_ops_coe(unit_overrides, building_overrides)
         if milestone_code:
             df.at[idx, "Ops Milestone Code"] = milestone_code
             df.at[idx, "Ops Milestone Date"] = milestone_date
-        if skip_milestones:
-            df.at[idx, "Ops COE"] = ""
-        else:
-            df.at[idx, "Ops COE"] = ops_coe or ""
+        df.at[idx, "Ops COE"] = ops_coe or ""
         # populate Building column from overrides metadata if available
         building_id = None
         if override_entry and isinstance(override_entry, dict):
