@@ -1,6 +1,15 @@
-# HBFA Ops ERP – Weekly Mylar Runbook
+# HBFA Ops ERP - Weekly Mylar Runbook
 
-This captures the exact, working steps you’re using today. Normal steps first, then optional backfill paths. Replace all `YYYY-MM-DD` with the actual report date you’re processing.
+This captures the exact, working steps you're using today. Normal steps first, then optional backfill paths. Replace all `YYYY-MM-DD` with the actual report date you're processing.
+
+## Chore 2025-11-06: Pre-kickoff downstream wiring
+
+- Scope: `chore/2025-11-06`. Track the wiring so the new `pre_kickoff` flag suppresses downstream milestones without deleting overrides.
+- Behavior gap (resolved): the React editor already blanked inputs, but the Netlify timeline/Mylar loaders still emitted stored overrides, so `pre_kickoff = true` buildings (e.g., SOMI B3 with a 2025-10-22 B3 anchor) continued to surface downstream.
+- Timeline function (`netlify/functions/ops-milestones-timeline.js` in hbfa-ops): building-level `pre_kickoff` now blanks anchors/overrides before computing schedules, tags each unit response with the flag, and removes flagged buildings from anchor-gap counts.
+- Polaris Mylar pipeline (`tools/polaris/report_pdf.py`, `tools/polaris/report_pdf_hso.py` in this repo): override index stores `pre_kickoff`, `_apply_ops_overrides`/HSO reducer drop Ops milestones whenever the flag is present, so staged overrides stay dormant until release.
+- Mylar layout tweak (2025-11-06): appended an `Ops COE` column to the far right of the PDF (following `MS Date`) and plumbed the exporter so Ops-projected COE dates appear when overrides are active.
+- Status: code and docs updated locally on 2025-11-06; pushes pending confirmation below.
 
 ## Normal Steps
 

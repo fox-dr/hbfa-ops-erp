@@ -101,7 +101,170 @@ def _select_latest_milestone_for_today(
     return sel_code, sel_key, sel_val
 
 
-def _reduce_overrides_asof_today(    overrides: dict[tuple[str, str], dict]) -> dict[tuple[str, str], dict]:    """    For each project/unit pair, compute the as-of-today milestone with handoff rules:    - If no building milestone (B1..B11) has a date <= today: no construction started -> blank.    - If latest building milestone <= today is before B11: use that building milestone.    - If latest building milestone is B11: prefer the latest unit milestone (U1..U6) with date <= today; if none, keep B11.    The returned overrides map is reduced so legacy selection picks exactly one milestone per row.    """    if not overrides:        return {}    result: dict[tuple[str, str], dict] = {}    # Group by project for convenience    projects: dict[str, dict[str, dict]] = {}    for (project_key, unit_key), payload in overrides.items():        projects.setdefault(project_key, {})[unit_key] = payload    building_codes = tuple(getattr(legacy_report, "BUILDING_MILESTONE_CODES", ()))  # type: ignore[attr-defined]    unit_codes = tuple(getattr(legacy_report, "UNIT_MILESTONE_CODES", ()))  # type: ignore[attr-defined]    build_key_factory = getattr(        legacy_report,        "_build_building_lookup_key",        lambda normalized: f"#building::{normalized or 'unknown'}",    )    for project_key, entries in projects.items():        building_entries = {            key: payload            for key, payload in entries.items()            if isinstance(key, str) and key.startswith("#building")        }        building_selection: dict[str, dict] = {}        for b_key, b_payload in building_entries.items():            overrides_dict = b_payload.get("overrides") if isinstance(b_payload, dict) else None            b_sel = _select_latest_milestone_for_today(overrides_dict or {}, building_codes)            timestamp = b_payload.get("timestamp") if isinstance(b_payload, dict) else None            building_id = b_payload.get("building_id") if isinstance(b_payload, dict) else None            normalized_building = b_payload.get("normalized_building_id") if isinstance(b_payload, dict) else None            if b_sel is None:                result[(project_key, b_key)] = {                    "overrides": {},                    "timestamp": timestamp,                    "building_id": building_id,                    "normalized_building_id": normalized_building,                }                building_selection[b_key] = {                    "code": None,                    "payload": b_payload,                }                continue            b_code, b_milestone_key, b_value = b_sel            result[(project_key, b_key)] = {                "overrides": {b_milestone_key: b_value},                "timestamp": timestamp,                "building_id": building_id,                "normalized_building_id": normalized_building,            }            building_selection[b_key] = {                "code": b_code,                "milestone_key": b_milestone_key,                "milestone_value": b_value,                "payload": b_payload,            }        if not building_selection:            fallback_key = build_key_factory(None)            building_selection[fallback_key] = {                "code": None,                "payload": {},            }            result[(project_key, fallback_key)] = {                "overrides": {},                "timestamp": None,                "building_id": None,                "normalized_building_id": None,            }        for unit_key, u_payload in entries.items():            if isinstance(unit_key, str) and unit_key.startswith("#building"):                continue            if not isinstance(u_payload, dict):                continue            unit_building_norm = u_payload.get("normalized_building_id")            preferred_building_key = (                build_key_factory(unit_building_norm) if unit_building_norm else None            )            building_entry = None            building_lookup_key = None            if preferred_building_key and preferred_building_key in building_selection:                building_entry = building_selection[preferred_building_key]                building_lookup_key = preferred_building_key            else:                building_lookup_key, building_entry = next(iter(building_selection.items()))            building_payload = result.get((project_key, building_lookup_key), {}) if building_lookup_key else {}            building_code = building_entry.get("code") if building_entry else None            result[(project_key, unit_key)] = {                "overrides": {},                "timestamp": u_payload.get("timestamp"),                "building_id": u_payload.get("building_id") or building_payload.get("building_id"),                "normalized_building_id": unit_building_norm or building_payload.get("normalized_building_id"),            }            if building_code != "B11":                continue            unit_overrides = u_payload.get("overrides") or {}            u_sel = _select_latest_milestone_for_today(unit_overrides, unit_codes)            if u_sel is None:                continue            _, u_milestone_key, u_value = u_sel            result[(project_key, unit_key)] = {                "overrides": {u_milestone_key: u_value},                "timestamp": u_payload.get("timestamp"),                "building_id": u_payload.get("building_id") or building_payload.get("building_id"),                "normalized_building_id": unit_building_norm or building_payload.get("normalized_building_id"),            }    return result
+def _reduce_overrides_asof_today(
+    overrides: dict[tuple[str, str], dict]
+) -> dict[tuple[str, str], dict]:
+    """
+    For each project/unit pair, compute the as-of-today milestone with handoff rules:
+    - If no building milestone (B1..B11) has a date <= today: no construction started -> blank.
+    - If latest building milestone <= today is before B11: use that building milestone.
+    - If latest building milestone is B11: prefer the latest unit milestone (U1..U6) with date <= today; if none, keep B11.
+
+    The returned overrides map is reduced so legacy selection picks exactly one milestone per row.
+    """
+    if not overrides:
+        return {}
+
+    result: dict[tuple[str, str], dict] = {}
+
+    # Group by project for convenience
+    projects: dict[str, dict[str, dict]] = {}
+    for (project_key, unit_key), payload in overrides.items():
+        projects.setdefault(project_key, {})[unit_key] = payload
+
+    building_codes = tuple(getattr(legacy_report, "BUILDING_MILESTONE_CODES", ()))  # type: ignore[attr-defined]
+    unit_codes = tuple(getattr(legacy_report, "UNIT_MILESTONE_CODES", ()))  # type: ignore[attr-defined]
+
+    build_key_factory = getattr(
+        legacy_report,
+        "_build_building_lookup_key",
+        lambda normalized: f"#building::{normalized or 'unknown'}",
+    )
+
+    for project_key, entries in projects.items():
+        building_entries = {
+            key: payload
+            for key, payload in entries.items()
+            if isinstance(key, str) and key.startswith("#building")
+        }
+        building_selection: dict[str, dict] = {}
+
+        for b_key, b_payload in building_entries.items():
+            timestamp = b_payload.get("timestamp") if isinstance(b_payload, dict) else None
+            building_id = b_payload.get("building_id") if isinstance(b_payload, dict) else None
+            normalized_building = b_payload.get("normalized_building_id") if isinstance(b_payload, dict) else None
+            b_pre_kickoff = bool(b_payload.get("pre_kickoff")) if isinstance(b_payload, dict) else False
+
+            if b_pre_kickoff:
+                result[(project_key, b_key)] = {
+                    "overrides": {},
+                    "timestamp": timestamp,
+                    "building_id": building_id,
+                    "normalized_building_id": normalized_building,
+                    "pre_kickoff": True,
+                }
+                building_selection[b_key] = {
+                    "code": None,
+                    "payload": b_payload,
+                    "pre_kickoff": True,
+                }
+                continue
+
+            overrides_dict = b_payload.get("overrides") if isinstance(b_payload, dict) else None
+            b_sel = _select_latest_milestone_for_today(overrides_dict or {}, building_codes)
+
+            if b_sel is None:
+                result[(project_key, b_key)] = {
+                    "overrides": {},
+                    "timestamp": timestamp,
+                    "building_id": building_id,
+                    "normalized_building_id": normalized_building,
+                    "pre_kickoff": False,
+                }
+                building_selection[b_key] = {
+                    "code": None,
+                    "payload": b_payload,
+                    "pre_kickoff": False,
+                }
+                continue
+
+            b_code, b_milestone_key, b_value = b_sel
+            result[(project_key, b_key)] = {
+                "overrides": {b_milestone_key: b_value},
+                "timestamp": timestamp,
+                "building_id": building_id,
+                "normalized_building_id": normalized_building,
+                "pre_kickoff": False,
+            }
+            building_selection[b_key] = {
+                "code": b_code,
+                "milestone_key": b_milestone_key,
+                "milestone_value": b_value,
+                "payload": b_payload,
+                "pre_kickoff": False,
+            }
+
+        if not building_selection:
+            fallback_key = build_key_factory(None)
+            building_selection[fallback_key] = {
+                "code": None,
+                "payload": {},
+                "pre_kickoff": False,
+            }
+            result[(project_key, fallback_key)] = {
+                "overrides": {},
+                "timestamp": None,
+                "building_id": None,
+                "normalized_building_id": None,
+                "pre_kickoff": False,
+            }
+
+        for unit_key, u_payload in entries.items():
+            if isinstance(unit_key, str) and unit_key.startswith("#building"):
+                continue
+            if not isinstance(u_payload, dict):
+                continue
+
+            unit_building_norm = u_payload.get("normalized_building_id")
+            preferred_building_key = (
+                build_key_factory(unit_building_norm) if unit_building_norm else None
+            )
+
+            building_entry = None
+            building_lookup_key = None
+            if preferred_building_key and preferred_building_key in building_selection:
+                building_entry = building_selection[preferred_building_key]
+                building_lookup_key = preferred_building_key
+            else:
+                building_lookup_key, building_entry = next(iter(building_selection.items()))
+
+            building_payload = result.get((project_key, building_lookup_key), {}) if building_lookup_key else {}
+            building_code = building_entry.get("code") if building_entry else None
+            unit_pre_kickoff = bool(u_payload.get("pre_kickoff")) if isinstance(u_payload, dict) else False
+            building_entry_payload = building_entry.get("payload") if isinstance(building_entry, dict) else None
+            building_entry_pre = bool(building_entry_payload.get("pre_kickoff")) if isinstance(building_entry_payload, dict) else False
+            building_result_pre = bool(building_payload.get("pre_kickoff")) if isinstance(building_payload, dict) else False
+            combined_pre_kickoff = unit_pre_kickoff or building_entry_pre or building_result_pre
+
+            result[(project_key, unit_key)] = {
+                "overrides": {},
+                "timestamp": u_payload.get("timestamp"),
+                "building_id": u_payload.get("building_id") or building_payload.get("building_id"),
+                "normalized_building_id": unit_building_norm or building_payload.get("normalized_building_id"),
+                "pre_kickoff": combined_pre_kickoff,
+            }
+
+            if combined_pre_kickoff:
+                continue
+
+            if building_code != "B11":
+                continue
+
+            unit_overrides = u_payload.get("overrides") or {}
+            u_sel = _select_latest_milestone_for_today(unit_overrides, unit_codes)
+            if u_sel is None:
+                continue
+
+            _, u_milestone_key, u_value = u_sel
+            result[(project_key, unit_key)] = {
+                "overrides": {u_milestone_key: u_value},
+                "timestamp": u_payload.get("timestamp"),
+                "building_id": u_payload.get("building_id") or building_payload.get("building_id"),
+                "normalized_building_id": unit_building_norm or building_payload.get("normalized_building_id"),
+                "pre_kickoff": False,
+            }
+
+    return result
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
