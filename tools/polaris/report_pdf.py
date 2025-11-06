@@ -366,6 +366,19 @@ def _resolve_ops_coe(
     return None
 
 
+def _extract_projected_coe(*payloads: object) -> Optional[str]:
+    for payload in payloads:
+        if isinstance(payload, dict):
+            value = payload.get("projected_coe")
+            if value in (None, "", False):
+                continue
+            unwrapped = _unwrap_attr(value)
+            text = str(unwrapped).strip()
+            if text:
+                return text
+    return None
+
+
 def _extract_pre_kickoff_flag(*payloads: object) -> bool:
     for payload in payloads:
         if isinstance(payload, dict):
@@ -411,6 +424,7 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
         normalized_building_id = _normalize_building_id(building_id_value)
         building_lookup_key = _build_building_lookup_key(normalized_building_id)
         building_pre_kickoff = _extract_pre_kickoff_flag(building_payload)
+        building_projected_coe = _extract_projected_coe(building_payload)
 
         # Capture building-level overrides per building_id to avoid collisions across buildings.
         if isinstance(building_payload, dict):
@@ -420,13 +434,16 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
                 existing = index.get(key)
                 existing_ts = existing.get("timestamp") if existing else None
                 if not existing or (existing_ts and timestamp and existing_ts < timestamp):
-                    index[key] = {
+                    entry = {
                         "overrides": building_overrides,
                         "timestamp": timestamp,
                         "building_id": building_id_value,
                         "normalized_building_id": normalized_building_id,
                         "pre_kickoff": building_pre_kickoff,
                     }
+                    if building_projected_coe is not None:
+                        entry["ops_projected_coe"] = building_projected_coe
+                    index[key] = entry
         key = (project_key, building_lookup_key)
         existing = index.get(key)
         if existing and isinstance(existing, dict):
@@ -439,14 +456,21 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
                 existing["normalized_building_id"] = normalized_building_id
             if is_newer:
                 existing["timestamp"] = timestamp
+            if building_projected_coe is not None:
+                existing["ops_projected_coe"] = building_projected_coe
+            elif "ops_projected_coe" in existing:
+                existing.pop("ops_projected_coe", None)
         elif building_pre_kickoff:
-            index[key] = {
+            entry = {
                 "overrides": {},
                 "timestamp": timestamp,
                 "building_id": building_id_value,
                 "normalized_building_id": normalized_building_id,
                 "pre_kickoff": True,
             }
+            if building_projected_coe is not None:
+                entry["ops_projected_coe"] = building_projected_coe
+            index[key] = entry
 
         unit_entry_recorded = False
         if isinstance(unit_payload, dict):
@@ -458,17 +482,21 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
                 unit_key = _normalize_unit_number(unit_id)
                 if unit_key:
                     unit_pre_kickoff = _extract_pre_kickoff_flag(unit_payload, building_payload)
+                    unit_projected_coe = _extract_projected_coe(unit_payload, building_payload)
                     key = (project_key, unit_key)
                     existing = index.get(key)
                     existing_ts = existing.get("timestamp") if existing else None
                     if not existing or (existing_ts and timestamp and existing_ts < timestamp):
-                        index[key] = {
+                        entry = {
                             "overrides": unit_overrides,
                             "timestamp": timestamp,
                             "building_id": building_id_value,
                             "normalized_building_id": normalized_building_id,
                             "pre_kickoff": unit_pre_kickoff,
                         }
+                        if unit_projected_coe is not None:
+                            entry["ops_projected_coe"] = unit_projected_coe
+                        index[key] = entry
                         unit_entry_recorded = True
 
         # If there are no milestone overrides but we have a building_id and a unit_number,
@@ -477,17 +505,21 @@ def _build_ops_override_index(items: Iterable[dict]) -> dict[tuple[str, str], di
             unit_fallback = _normalize_unit_number(unit_number)
             if unit_fallback:
                 unit_pre_kickoff = _extract_pre_kickoff_flag(unit_payload, building_payload)
+                unit_projected_coe = _extract_projected_coe(unit_payload, building_payload)
                 key = (project_key, unit_fallback)
                 existing = index.get(key)
                 existing_ts = existing.get("timestamp") if existing else None
                 if not existing or (existing_ts and timestamp and existing_ts < timestamp):
-                    index[key] = {
+                    entry = {
                         "overrides": {},
                         "timestamp": timestamp,
                         "building_id": building_id_value,
                         "normalized_building_id": normalized_building_id,
                         "pre_kickoff": unit_pre_kickoff,
                     }
+                    if unit_projected_coe is not None:
+                        entry["ops_projected_coe"] = unit_projected_coe
+                    index[key] = entry
     return index
 
 
@@ -586,12 +618,14 @@ def _apply_ops_overrides(df: pd.DataFrame, overrides: dict[tuple[str, str], dict
         building_overrides = building_entry.get("overrides") if building_entry else None
         unit_pre_kickoff = bool(override_entry.get("pre_kickoff")) if isinstance(override_entry, dict) else False
         building_pre_kickoff = bool(building_entry.get("pre_kickoff")) if isinstance(building_entry, dict) else False
+        unit_projected_coe_meta = override_entry.get("ops_projected_coe") if isinstance(override_entry, dict) else None
+        building_projected_coe_meta = building_entry.get("ops_projected_coe") if isinstance(building_entry, dict) else None
         skip_milestones = unit_pre_kickoff or building_pre_kickoff
         milestone_code = milestone_date = None
         ops_coe = None
         if not skip_milestones:
             milestone_code, milestone_date = _resolve_milestone(unit_overrides, building_overrides)
-            ops_coe = _resolve_ops_coe(unit_overrides, building_overrides)
+            ops_coe = unit_projected_coe_meta or building_projected_coe_meta or _resolve_ops_coe(unit_overrides, building_overrides)
         if milestone_code:
             df.at[idx, "Ops Milestone Code"] = milestone_code
             df.at[idx, "Ops Milestone Date"] = milestone_date
